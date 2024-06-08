@@ -3,37 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home Page</title>
+    <title>File Share App</title>
     <link rel="stylesheet" type="text/css" href="style.css">
 </head>
+
 <body>
     <div class="app">
-        <div class="screen join-screen active">
-            <div class="form">
-                <h2>Share your files</h2>
-                <div class="form-input">
-                    <button id="sender-start-con-btn">Create Room</button>
-                </div>
-                <div class="form-input" id="join-id">
-                   
-                </div>
-            </div>
+        <h1 class="center">File Share App</h1>
+       <div class="center">
+          <button type="button" class="button button1" onclick="window.location.href='sender.html'">Click here to send files</button>
+       </div>
+        <div class="center">
+            <button type="button" class="button button2" onclick="window.location.href='receiver.html'"">Click here to receive files</button>
         </div>
-        <div class="screen fs-screen">
-            <div class="file-input">
-                <label for="file-input">
-                    Click here to select files for sharing
-                </label>
-                <input type="file" id="file-input">
-            </div>
-            <div class="files-list">
-                <div class="title">Shared files:</div>
-             
-            </div>
-        </div>
+        
+        <br>
+        
+        
+            
+
+        
     </div>
-    
-    <script type="text/javascript" src="socket.io/socket.io.js"></script>
-    <script type="text/javascript" src="code.js"></script>
+   
 </body>
 </html>

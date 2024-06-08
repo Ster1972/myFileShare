@@ -10,6 +10,8 @@
         document.querySelector("#join-id").innerHTML = `
             <b> Room ID</b>
             <span>${joinID}</span>
+            <br><br>
+             <p>Pass on this code to other participate</p>
             `;
         socket.emit("sender-join", {
             uid: joinID

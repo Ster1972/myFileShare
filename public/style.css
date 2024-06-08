@@ -26,6 +26,29 @@ body {
     border-left: 1px solid #ddd;
 }
 
+.button {
+    border: none;
+    color: white;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 18px;
+    border-radius: 20px;
+    margin: 4px 2px;
+    cursor: pointer;
+  }
+  
+  .button1 {background-color: #04AA6D;} /* Green */
+  .button2 {background-color: #008CBA;} /* Blue */
+
+  .center {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100px;
+  }
+
 .join-screen .form {
     position: absolute;
     top: 50%;
