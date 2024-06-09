@@ -1,6 +1,6 @@
 (function(){
     let senderID;
-    const socket = io({ transports: ["websocket"] })
+    const socket = io()
 
     function generateID(){
         return `${Math.trunc(Math.random()*999)}-${Math.trunc(Math.random()*999)}-${Math.trunc(Math.random()*999)}`
