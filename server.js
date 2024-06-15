@@ -26,15 +26,12 @@ io.on("connection", function(socket) {
     });
 
     socket.on("fs-start", function(data) {
-        if (data && data.uid) {
-            io.to(data.uid).emit("fs-share");
-        } else {
-            console.error("Invalid fs-start event data:", data);
-        }
+        io.to(data.uid).emit("fs-share");
     });
 
     socket.on("file-raw", function(data) {
         io.to(data.uid).emit("fs-share", data.buffer);
+        //console.log(`File chunk sent to room ${data.uid}, size: ${data.buffer.byteLength}`);
     });
 
     socket.on("disconnect", () => {

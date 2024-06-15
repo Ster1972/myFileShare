@@ -1,3 +1,4 @@
+
 (function() {
     let senderID;
     const socket = io();
@@ -41,22 +42,16 @@
     });
 
     socket.on("fs-share", function(buffer) {
-        if (fileShare && fileShare.metadata) { // Ensure fileShare and fileShare.metadata are defined
-            fileShare.buffer.push(buffer);
-            fileShare.transmitted += buffer.byteLength;
-            fileShare.progress_node.innerHTML = Math.min(Math.trunc(fileShare.transmitted / fileShare.metadata.total_buffer_size * 100), 100) + "%";
-            if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
-                // Indicate the start of the download process
-                //fileShare.progress_node.innerHTML = "Assembling and downloading...";
-                download(new Blob(fileShare.buffer), fileShare.metadata.filename);
-                fileShare = {};
-            } else {
-                socket.emit("fs-start", { uid: senderID });
-            }
+        fileShare.buffer.push(buffer);
+        fileShare.transmitted += buffer.byteLength;
+        fileShare.progress_node.innerHTML = Math.min(Math.trunc(fileShare.transmitted / fileShare.metadata.total_buffer_size * 100), 100) + "%";
+        if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
+            download(new Blob(fileShare.buffer), fileShare.metadata.filename);
+            fileShare = {};
+        } else {
+            socket.emit("fs-start", { uid: senderID });
         }
     });
-    
-    
 
     function download(blob, filename) {
         const url = URL.createObjectURL(blob);
@@ -71,3 +66,6 @@
         }, 100);
     }
 })();
+
+
+

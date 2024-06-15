@@ -37,41 +37,37 @@
 
         shareFile(file, el.querySelector(".progress"));
     });
-//-------
-async function shareFile(file, progressNode) {
-    const bufferSize = 512 * 1024; // 512 KB
-    const fileSize = file.size;
-    let offset = 0;
 
-    socket.emit("file-meta", {
-        uid: receiverID,
-        metadata: {
-            filename: file.name,
-            total_buffer_size: fileSize,
-            buffer_size: bufferSize
-        }
-    });
+    async function shareFile(file, progressNode) {
+        const bufferSize = 512 * 1024; // 256 KB
+        const fileSize = file.size;
+        let offset = 0;
 
-    socket.on("fs-share", async function() {
-        if (receiverID && offset < fileSize) { // Ensure receiverID is defined
-            const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
-            const buffer = await readFileAsArrayBuffer(blob);
-            socket.emit("file-raw", {
-                uid: receiverID,
-                buffer: new Uint8Array(buffer)
-            });
-            offset += bufferSize;
-            progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
-            if (offset < fileSize) {
-                socket.emit("fs-start", { uid: receiverID }); // Emit fs-start with receiverID
+        socket.emit("file-meta", {
+            uid: receiverID,
+            metadata: {
+                filename: file.name,
+                total_buffer_size: fileSize,
+                buffer_size: bufferSize
             }
-        }
-    });
-}
+        });
 
-//----
-   
-
+        socket.on("fs-share", async function() {
+            while (offset < fileSize) {
+                const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
+                const buffer = await readFileAsArrayBuffer(blob);
+                socket.emit("file-raw", {
+                    uid: receiverID,
+                    buffer: new Uint8Array(buffer)
+                });
+                offset += bufferSize;
+                progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
+                if (offset < fileSize) {
+                    socket.emit("fs-share");
+                }
+            }
+        });
+    }
 
     function readFileAsArrayBuffer(blob) {
         return new Promise((resolve, reject) => {
