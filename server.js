@@ -47,7 +47,6 @@ const io = require("socket.io")(server);
 app.use(express.static(path.join(__dirname, "public")));
 
 io.on("connection", function(socket) {
-    console.log("New client connected");
 
     socket.on("sender-join", function(data) {
         socket.join(data.uid);
