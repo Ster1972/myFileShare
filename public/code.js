@@ -38,7 +38,7 @@
         shareFile(file, el.querySelector(".progress"));
     });
 
-    function shareFile(file, progressNode) {
+    async function shareFile(file, progressNode) {
         const bufferSize = 256 * 1024; // 256 KB
         const fileSize = file.size;
         let offset = 0;
@@ -52,22 +52,28 @@
             }
         });
 
-        socket.on("fs-share", function() {
-            if (offset >= fileSize) return;
-
-            const reader = new FileReader();
-            const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
-            reader.onload = function(e) {
+        socket.on("fs-share", async function() {
+            while (offset < fileSize) {
+                const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
+                const buffer = await readFileAsArrayBuffer(blob);
                 socket.emit("file-raw", {
                     uid: receiverID,
-                    buffer: new Uint8Array(reader.result)
+                    buffer: new Uint8Array(buffer)
                 });
                 offset += bufferSize;
                 progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
                 if (offset < fileSize) {
                     socket.emit("fs-share");
                 }
-            };
+            }
+        });
+    }
+
+    function readFileAsArrayBuffer(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
             reader.readAsArrayBuffer(blob);
         });
     }
