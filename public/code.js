@@ -39,7 +39,7 @@
     });
 
     async function shareFile(file, progressNode) {
-        const bufferSize = 512 * 1024; // 256 KB
+        const bufferSize = 128 * 1024; // 256 KB
         const fileSize = file.size;
         let offset = 0;
 
