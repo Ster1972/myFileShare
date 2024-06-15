@@ -39,7 +39,7 @@
     });
 
     function shareFile(file, progressNode) {
-        const bufferSize = 64 * 1024; // 64 KB
+        const bufferSize = 256 * 1024; // 256 KB
         const fileSize = file.size;
         let offset = 0;
 
@@ -53,6 +53,8 @@
         });
 
         socket.on("fs-share", function() {
+            if (offset >= fileSize) return;
+
             const reader = new FileReader();
             const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
             reader.onload = function(e) {
