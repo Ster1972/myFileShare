@@ -12,7 +12,7 @@
             return;
         }
         let joinID = generateID();
-        
+
         socket.emit("receiver-join", {
             uid: joinID,
             sender_uid: senderID
@@ -22,9 +22,7 @@
     });
 
     let fileShare = {};
-
     socket.on("fs-meta", function(metadata) {
-        console.log('fs-meta', metadata);
         fileShare.metadata = metadata;
         fileShare.transmitted = 0;
         fileShare.buffer = [];
@@ -32,41 +30,38 @@
         let el = document.createElement("div");
         el.classList.add("item");
         el.innerHTML = `
-           <div class="progress">0%</div>
-           <div class="filename">${metadata.filename}</div>
+            <div class="progress">0%</div>
+            <div class="filename">${metadata.filename}</div>
         `;
         document.querySelector(".files-list").appendChild(el);
 
         fileShare.progress_node = el.querySelector(".progress");
 
-        socket.emit("fs-start", {
-            uid: senderID
-        });
+        socket.emit("fs-start", { uid: senderID });
     });
 
     socket.on("fs-share", function(buffer) {
-        // Ensure buffer is an ArrayBuffer
-        const bytes = new Uint8Array(buffer);
-
-        fileShare.buffer.push(bytes);
-        fileShare.transmitted += bytes.byteLength;
-        fileShare.progress_node.innerHTML = Math.trunc((fileShare.transmitted / fileShare.metadata.total_buffer_size) * 100) + "%";
-        if (fileShare.transmitted === fileShare.metadata.total_buffer_size) {
+        fileShare.buffer.push(buffer);
+        fileShare.transmitted += buffer.byteLength;
+        fileShare.progress_node.innerHTML = Math.min(Math.trunc(fileShare.transmitted / fileShare.metadata.total_buffer_size * 100), 100) + "%";
+        if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
             download(new Blob(fileShare.buffer), fileShare.metadata.filename);
             fileShare = {};
         } else {
-            socket.emit("fs-start", {
-                uid: senderID
-            });
+            socket.emit("fs-start", { uid: senderID });
         }
     });
 
     function download(blob, filename) {
-        let a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
+        setTimeout(() => {
+            URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }, 100);
     }
 })();
