@@ -44,6 +44,8 @@ const server = require("http").createServer(app);
 
 const io = require("socket.io")(server);
 
+const PORT = process.env.PORT || 5056;
+
 app.use(express.static(path.join(__dirname, "public")));
 
 io.on("connection", function(socket) {
@@ -75,8 +77,8 @@ io.on("connection", function(socket) {
     });
 });
 
-server.listen(5056, () => {
-    console.log("Server is running on port 5056");
+server.listen(PORT, () => {
+    console.log(`Server is running on port: ${PORT}`);
 });
 
 
