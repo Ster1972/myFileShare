@@ -53,7 +53,7 @@
         });
 
         socket.on("fs-share", async function() {
-            while (offset < fileSize) {
+            if (offset < fileSize) {
                 const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
                 const buffer = await readFileAsArrayBuffer(blob);
                 socket.emit("file-raw", {
