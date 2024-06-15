@@ -1,4 +1,3 @@
-
 (function() {
     let senderID;
     const socket = io();
@@ -66,6 +65,3 @@
         }, 100);
     }
 })();
-
-
-
