@@ -20,6 +20,7 @@ io.on("connection", function(socket) {
     });
 
     socket.on("file-meta", function(data) {
+        console.log('file-meta', data)
         io.to(data.uid).emit("fs-meta", data);
     });
 
@@ -28,6 +29,7 @@ io.on("connection", function(socket) {
     });
 
     socket.on("file-raw", function(data) {
+        //console.log('file-raw', data)
         io.to(data.uid).emit("fs-share", data.buffer);
     });
 

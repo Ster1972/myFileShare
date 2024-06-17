@@ -21,51 +21,66 @@
         document.querySelector(".fs-screen").classList.add("active");
     });
 
-    let fileShare = {
-        buffer: [],
-        transmitted: 0,
-        metadata: null,
-        progress_node: null,
-    };
+    let fileShare = {};
+    let metadataReceived = false;
 
-    socket.on("fs-meta", function(data) {
-        fileShare.metadata = data.metadata;
-        fileShare.transmitted = 0;  // Reset transmitted bytes
-        fileShare.buffer = [];  // Clear buffer
+    socket.on("fs-meta", function(metadata) {
+        console.log('fs-meta', metadata)
+        let object = metadata
+        fileShare.metadata = object.metadata;
+        console.log('fileshare.metadata = ', fileShare.metadata)
+        fileShare.transmitted = 0;
+        fileShare.buffer = [];
+        metadataReceived = true;
 
-        // Create a new progress node
         let el = document.createElement("div");
         el.classList.add("item");
-        fileShare.progress_node = document.createElement("div");
-        fileShare.progress_node.classList.add("progress");
-        fileShare.progress_node.innerText = "0%";
-        el.appendChild(fileShare.progress_node);
-        el.innerHTML += `<div class="filename">${fileShare.metadata.filename}</div>`;
+        el.innerHTML = `
+            <div class="progress">0%</div>
+            <div class="filename">${metadata.filename}</div>
+        `;
         document.querySelector(".files-list").appendChild(el);
 
-        // Emit the acknowledgment
-        socket.emit("fs-share-ack", { sender_uid: senderID });
+        fileShare.progress_node = el.querySelector(".progress");
+
+        if (metadataReceived) {
+            socket.emit("fs-share-ack", { sender_uid: senderID });
+        } else {
+            console.error("Metadata is missing or incomplete.");
+        }
     });
-socket.on("fs-share", function(buffer) {
-    fileShare.buffer.push(new Uint8Array(buffer));
-    fileShare.transmitted += buffer.byteLength;
 
-    // Update the progress node text
-    const progress = Math.min(Math.trunc(fileShare.transmitted / fileShare.metadata.total_buffer_size * 100), 100) + "%";
-    console.log('Progress:', progress);
-    fileShare.progress_node.innerText = progress;
+    socket.on("fs-share", function(buffer) {
+        console.log('xxxxx', buffer, fileShare.metadata.total_buffer_size);
+        fileShare.buffer.push(buffer);
+        fileShare.transmitted += buffer.byteLength;
 
+        const progress = Math.min(Math.trunc((fileShare.transmitted / fileShare.metadata.total_buffer_size) * 100), 100);
+        fileShare.progress_node.innerText = progress + "%";
 
-    if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
-        download(new Blob(fileShare.buffer), fileShare.metadata.filename);
-        fileShare.buffer = []; // Clear buffer after download
-    } else {
-        socket.emit("fs-share-ack", { sender_uid: senderID });
+        if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
+            console.log('download ready');
+            const concatenatedBuffer = concatenateArrayBuffers(fileShare.buffer);
+            download(concatenatedBuffer, fileShare.metadata.filename);
+            fileShare = {}; // Reset fileShare object
+        } else {
+            socket.emit("fs-share-ack", { sender_uid: senderID });
+        }
+    });
+
+    function concatenateArrayBuffers(buffers) {
+        let totalLength = buffers.reduce((acc, value) => acc + value.byteLength, 0);
+        let result = new Uint8Array(totalLength);
+        let offset = 0;
+        buffers.forEach((buffer) => {
+            result.set(new Uint8Array(buffer), offset);
+            offset += buffer.byteLength;
+        });
+        return result.buffer;
     }
-});
 
-
-    function download(blob, filename) {
+    function download(buffer, filename) {
+        const blob = new Blob([buffer]);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
