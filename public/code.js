@@ -52,21 +52,27 @@
             }
         });
 
-        socket.on("fs-share", async function() {
-            while (offset < fileSize) {
-                const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
-                const buffer = await readFileAsArrayBuffer(blob);
-                socket.emit("file-raw", {
-                    uid: receiverID,
-                    buffer: new Uint8Array(buffer)
-                });
-                offset += bufferSize;
-                progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
+        socket.on("fs-share-ack", () => {
+            const sendChunk = async () => {
                 if (offset < fileSize) {
-                    socket.emit("fs-share");
+                    const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
+                    const buffer = await readFileAsArrayBuffer(blob);
+                    socket.emit("file-raw", {
+                        uid: receiverID,
+                        buffer: buffer
+                    });
+                    offset += bufferSize;
+                    progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
+                    if (offset < fileSize) {
+                        socket.emit("fs-start", { uid: receiverID });
+                    }
                 }
-            }
+            };
+
+            sendChunk();
         });
+
+        socket.emit("fs-start", { uid: receiverID });
     }
 
     function readFileAsArrayBuffer(blob) {
