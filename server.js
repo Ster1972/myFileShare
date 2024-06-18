@@ -10,8 +10,8 @@ const io = require("socket.io")(server);
 const PORT = process.env.PORT || 5056;
 
 // Increase payload limit to handle larger chunks
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+app.use(bodyParser.json({ limit: '100mb' }));
+app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
 io.on("connection", (socket) => {

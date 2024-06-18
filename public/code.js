@@ -40,7 +40,7 @@
             });
 
             async function shareFile(file, progressNode) {
-                const bufferSize = 64 * 1024; // Reduced buffer size to 64 KB to prevent large payloads
+                const bufferSize = 128 * 1024; 
                 const fileSize = file.size;
                 let offset = 0;
 
