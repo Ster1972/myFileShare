@@ -31,7 +31,7 @@
                 let el = document.createElement("div");
                 el.classList.add("item");
                 el.innerHTML = `
-                    <div class="progress">0%</</div>
+                    <div class="progress">0%</div>
                     <div class="filename">${file.name}</div>
                 `;
                 document.querySelector(".files-list").appendChild(el);
@@ -40,7 +40,7 @@
             });
 
             async function shareFile(file, progressNode) {
-                const bufferSize = 256 * 1024; // 256 KB
+                const bufferSize = 1024 * 1024; // Increased buffer size to 1 MB for faster transfer
                 const fileSize = file.size;
                 let offset = 0;
 
@@ -53,24 +53,17 @@
                     }
                 });
 
-                socket.on("fs-share-ack", () => {
-                    const sendChunk = async () => {
-                        if (offset < fileSize) {
-                            const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
-                            const buffer = await readFileAsArrayBuffer(blob);
-                            socket.emit("file-raw", {
-                                uid: receiverID,
-                                buffer: buffer
-                            });
-                            offset += bufferSize;
-                            progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
-                            if (offset < fileSize) {
-                                socket.emit("fs-start", { uid: receiverID });
-                            }
-                        }
-                    };
-
-                    sendChunk();
+                socket.on("fs-share-ack", async () => {
+                    while (offset < fileSize) {
+                        const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
+                        const buffer = await readFileAsArrayBuffer(blob);
+                        socket.emit("file-raw", {
+                            uid: receiverID,
+                            buffer: buffer
+                        });
+                        offset += bufferSize;
+                        progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
+                    }
                 });
 
                 socket.emit("fs-start", { uid: receiverID });
@@ -85,4 +78,4 @@
                 });
             }
         })();
-    
+
