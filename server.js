@@ -1,40 +1,37 @@
 const express = require("express");
 const path = require("path");
+const http = require("http");
 
 const app = express();
-const server = require("http").createServer(app);
+const server = http.createServer(app);
 const io = require("socket.io")(server);
 
 const PORT = process.env.PORT || 5056;
 
 app.use(express.static(path.join(__dirname, "public")));
 
-io.on("connection", function(socket) {
-    socket.on("sender-join", function(data) {
+io.on("connection", (socket) => {
+    console.log("New client connected");
+
+    socket.on("sender-join", (data) => {
         socket.join(data.uid);
     });
 
-    socket.on("receiver-join", function(data) {
+    socket.on("receiver-join", (data) => {
         socket.join(data.sender_uid);
-        io.to(data.sender_uid).emit("init", data.sender_uid);
+        io.to(data.sender_uid).emit("init", { receiver_uid: socket.id });
     });
 
-    socket.on("file-meta", function(data) {
-        console.log('file-meta', data)
+    socket.on("file-meta", (data) => {
         io.to(data.uid).emit("fs-meta", data);
     });
 
-    socket.on("fs-start", function(data) {
+    socket.on("fs-start", (data) => {
         io.to(data.uid).emit("fs-share-ack", { uid: data.uid });
     });
 
-    socket.on("file-raw", function(data) {
-        //console.log('file-raw', data)
-        io.to(data.uid).emit("fs-share", data.buffer);
-    });
-
-    socket.on("fs-share-ack", function(data) {
-        io.to(data.sender_uid).emit("fs-share-proceed");
+    socket.on("file-raw", (data) => {
+        io.to(data.uid).emit("fs-share", data);
     });
 
     socket.on("disconnect", () => {

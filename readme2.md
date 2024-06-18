@@ -1,44 +1,147 @@
-I have provided three code blocks below which i need you to check for correct functionality.  The issue I currently is that the receiver progess box on the html page is not being update as the file is being received.  The transfer does complete successfully but the progress bar remaining at zero percent through out the transfer.  I need your help to fix this issue.
+Below I have provided three code blocks (server side, sender and receiver).  The code should allow the transfer of files from one computer to another computer, large or small.  I being working on this code and have loss the functionality I had.  I would like you to make the necessary changes to make it function again.
 
-//HTML code//
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home Page</title>
-    <link rel="stylesheet" type="text/css" href="style.css">
-</head>
-<body>
-    <div class="app">
-        <div class="screen join-screen active">
-            <div class="form">
-                <h2>Share your files</h2>
-                <div class="form-input">
-                    <label for="join-id">Join ID</label>
-                    <input type="text" id="join-id">
-                </div>
-                <div class="form-input">
-                    <button id="receiver-start-con-btn">Connect</button>
-                </div>
-            </div>
-        </div>
-        <div class="screen fs-screen">
-            
-            <div class="files-list">
-                <div class="title">Shared files:</div>
-               
-            </div>
-        </div>
-    </div>
-    
-   
-    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/downloadjs/1.4.1/download.min.js"></script>
-    <script type="text/javascript" src="socket.io/socket.io.js"></script>
-    <script type="text/javascript" src="receiver.js"></script>
-</body>
-</html>
-///reciever code block///
+/// server side ///
+const express = require("express");
+const path = require("path");
+
+const app = express();
+const server = require("http").createServer(app);
+const io = require("socket.io")(server);
+
+const PORT = process.env.PORT || 5056;
+
+app.use(express.static(path.join(__dirname, "public")));
+
+io.on("connection", function(socket) {
+    socket.on("sender-join", function(data) {
+        socket.join(data.uid);
+    });
+
+    socket.on("receiver-join", function(data) {
+        socket.join(data.sender_uid);
+        io.to(data.sender_uid).emit("init", data.sender_uid);
+    });
+
+    socket.on("file-meta", function(data) {
+        console.log('file-meta', data)
+        io.to(data.uid).emit("fs-meta", data);
+    });
+
+    socket.on("fs-start", function(data) {
+        console.log('fs-start',data)
+        io.to(data.uid).emit("fs-share-ack", { uid: data.uid });
+    });
+
+    socket.on("file-raw", function(data) {
+        //console.log('file-raw', data)
+        io.to(data.uid).emit("fs-share", data.buffer);
+    });
+
+    socket.on("fs-share-ack", function(data) {
+        console.log('fs-share-ack',data)
+        io.to(data.sender_uid).emit("fs-share-proceed");
+    });
+
+    socket.on("disconnect", () => {
+        console.log("Client disconnected");
+    });
+});
+
+server.listen(PORT, () => {
+    console.log(`Server is running on port: ${PORT}`);
+});
+
+/// sender ///
+(function() {
+    let receiverID;
+    const socket = io();
+
+    function generateID() {
+        return `${Math.trunc(Math.random() * 999)}-${Math.trunc(Math.random() * 999)}-${Math.trunc(Math.random() * 999)}`;
+    }
+
+    document.querySelector("#sender-start-con-btn").addEventListener("click", function() {
+        let joinID = generateID();
+        document.querySelector("#join-id").innerHTML = `
+            <b> Room ID</b>
+            <span>${joinID}</span>
+            <br><br>
+            <p>Pass on this code to other participants</p>
+        `;
+        socket.emit("sender-join", { uid: joinID });
+    });
+
+    socket.on("init", function(uid) {
+        receiverID = uid;
+        document.querySelector(".join-screen").classList.remove("active");
+        document.querySelector(".fs-screen").classList.add("active");
+    });
+
+    document.querySelector("#file-input").addEventListener("change", function(e) {
+        let file = e.target.files[0];
+        if (!file) { return; }
+
+        let el = document.createElement("div");
+        el.classList.add("item");
+        el.innerHTML = `
+            <div class="progress">0%</div>
+            <div class="filename">${file.name}</div>
+        `;
+        document.querySelector(".files-list").appendChild(el);
+
+        shareFile(file, el.querySelector(".progress"));
+    });
+
+    async function shareFile(file, progressNode) {
+        const bufferSize = 256 * 1024; // 256 KB
+        const fileSize = file.size;
+        let offset = 0;
+
+        socket.emit("file-meta", {
+            uid: receiverID,
+            metadata: {
+                filename: file.name,
+                total_buffer_size: fileSize,
+                buffer_size: bufferSize
+            }
+        });
+
+        socket.on("fs-share-ack", () => {
+            const sendChunk = async () => {
+                if (offset < fileSize) {
+                    const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
+                    const buffer = await readFileAsArrayBuffer(blob);
+                    socket.emit("file-raw", {
+                        uid: receiverID,
+                        buffer: buffer
+                    });
+                    offset += bufferSize;
+                    progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
+                    if (offset < fileSize) {
+                        socket.emit("fs-start", { uid: receiverID });
+                    }
+                }
+            };
+
+            sendChunk();
+        });
+
+        socket.emit("fs-start", { uid: receiverID });
+    }
+
+ 
+
+    function readFileAsArrayBuffer(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(blob);
+        });
+    }
+})();
+
+/// receiver ///
 (function() {
     let senderID;
     const socket = io();
@@ -62,49 +165,39 @@ I have provided three code blocks below which i need you to check for correct fu
         document.querySelector(".fs-screen").classList.add("active");
     });
 
-    let fileShare = {
-        buffer: [],
-        transmitted: 0,
-        metadata: null,
-        progress_node: null,
-    };
+    let fileShare = {};
+    
+    socket.on("fs-meta", function(metadata) {
+        console.log('fs-meta', metadata)
+        fileShare.metadata = metadata;
+        fileShare.transmitted = 0;
+        fileShare.buffer = [];
 
-    socket.on("fs-meta", function(data) {
-        fileShare.metadata = data.metadata;
-        fileShare.transmitted = 0;  // Reset transmitted bytes
-        fileShare.buffer = [];  // Clear buffer
-
-        // Create a new progress node
         let el = document.createElement("div");
         el.classList.add("item");
-        fileShare.progress_node = document.createElement("div");
-        fileShare.progress_node.classList.add("progress");
-        fileShare.progress_node.innerText = "0%";
-        el.appendChild(fileShare.progress_node);
-        el.innerHTML += `<div class="filename">${fileShare.metadata.filename}</div>`;
+        el.innerHTML = `
+            <div class="progress">0%</div>
+            <div class="filename">${metadata.filename}</div>
+        `;
         document.querySelector(".files-list").appendChild(el);
 
-        // Emit the acknowledgment
-        socket.emit("fs-share-ack", { sender_uid: senderID });
+        fileShare.progress_node = el.querySelector(".progress");
+
+        socket.emit("fs-start", { uid: senderID });
     });
-socket.on("fs-share", function(buffer) {
-    fileShare.buffer.push(new Uint8Array(buffer));
-    fileShare.transmitted += buffer.byteLength;
 
-    // Update the progress node text
-    const progress = Math.min(Math.trunc(fileShare.transmitted / fileShare.metadata.total_buffer_size * 100), 100) + "%";
-    console.log('Progress:', progress);
-    fileShare.progress_node.innerText = progress;
-
-
-    if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
-        download(new Blob(fileShare.buffer), fileShare.metadata.filename);
-        fileShare.buffer = []; // Clear buffer after download
-    } else {
-        socket.emit("fs-share-ack", { sender_uid: senderID });
-    }
-});
-
+    socket.on("fs-share", function(buffer) {
+        fileShare.buffer.push(buffer);
+        fileShare.transmitted += buffer.byteLength;
+        let progressPercentage = Math.min(Math.trunc(fileShare.transmitted / fileShare.metadata.total_buffer_size * 100), 100);
+        fileShare.progress_node.innerHTML = progressPercentage + "%"
+        if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
+            download(new Blob(fileShare.buffer), fileShare.metadata.filename);
+            fileShare = {};
+        } else {
+            socket.emit("fs-start", { uid: senderID });
+        }
+    });
 
     function download(blob, filename) {
         const url = URL.createObjectURL(blob);
@@ -119,165 +212,4 @@ socket.on("fs-share", function(buffer) {
         }, 100);
     }
 })();
-/// css code block//
-* {
-    margin: 0px;
-    padding: 0px;
-    box-sizing: border-box;
-}
-body {
-    background: #f5f5f5;
-    font-family: "Roboto", sans-serif;
-}
-.screen {
-    display: none;
-}
-.screen.active {
-    display: block;
-}
-.app {
-    position: fixed;
-    top: 0px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 100%;
-    height: 100%;
-    max-width: 500px;
-    background: #fff;
-    border-right: 1px solid #ddd;
-    border-left: 1px solid #ddd;
-}
 
-.button {
-    border: none;
-    color: white;
-    padding: 10px 20px;
-    text-align: center;
-    text-decoration: none;
-    display: inline-block;
-    font-size: 18px;
-    border-radius: 20px;
-    margin: 4px 2px;
-    cursor: pointer;
-  }
-  
-  .button1 {background-color: #04AA6D;} /* Green */
-  .button2 {background-color: #008CBA;} /* Blue */
-
-  .center {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100px;
-  }
-
-.join-screen .form {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    padding: 50px;
-}
-
-.join-screen .form .form-input {
-    margin: 10px 0px;
-}
-.join-screen .form h2 {
-    font-size: 40px;
-    line-height: 45px;
-    color: #222;
-    margin-bottom: 20px;
-}
-.join-screen .form button {
-    background: #111;
-    padding: 10px 20px;
-    font-size: 18px;
-    border-radius: 20px;
-    color: #fff;
-    border: none;
-    outline: none;
-    cursor: pointer;
-}
-.join-screen .form #join-id b {
-    color: #222;
-    display: block;
-    margin-top: 20px;
-}
-.join-screen .form #join-id span {
-    display: inline-block;
-    font-size: 25px;
-    font-family: monospace;
-    color: #222;
-    padding: 10px;
-    border: 1px solid #111;
-    margin-top: 5px;
-}
-.join-screen .form label {
-    color: #222;
-    font-size: 18px;
-}
-.join-screen .form input {
-    display: block;
-    margin: 10px 0px;
-    width: 100%;
-    max-width: 200px;
-    border: 1px solid #111;
-    color: #111;
-    font-size: 20px;
-    padding: 10px;
-}
-
-.fs-screen {
-    padding: 20px;
-}
-.fs-screen .file-input {
-    width: 100%;
-    border: 2px dashed #555;
-}
-
-.fs-screen .file-input label {
-    display: block;
-    width: 100%;
-    padding: 40px 50px;
-    text-align: center;
-    color: #111;
-    font-size: 18px;
-}
-
-.fs-screen .file-input input {
-    display: none;
-}
-
-.fs-screen .files-list {
-    margin-top: 20px;
-    display: flex;
-    justify-content: space-between;
-    gap: 20px;
-    flex-wrap: wrap;
-}
-
-.fs-screen .files-list .title {
-    width: 100%;
-    font-size: 18px;
-    color: #555;
-    margin-bottom: 20px;
-}
-
-.fs-screen .files-list .item {
-    width: 33.33%;
-    min-width: 200px;
-    border: 1px solid #eee;
-    box-shadow: 0px 0px 5px 2px rgba(0,0,0, 0.05);
-}
-
-.fs-screen .files-list .item .progress {
-    padding: 30px;
-    text-align: center;
-    font-size: 50px;
-    font-family: monospace;
-    color: #222;
-}
-.fs-screen .files-list .item .filename {
-    font-size: 16px;
-    padding: 5px;
-    border-top: 1px solid #eee;
-}
