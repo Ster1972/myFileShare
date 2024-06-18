@@ -43,6 +43,8 @@
                 const bufferSize = 64 * 1024; // 64 KB
                 const fileSize = file.size;
                 let offset = 0;
+                let sending = false;
+                let pendingChunks = [];
 
                 socket.emit("file-meta", {
                     uid: receiverID,
@@ -57,7 +59,7 @@
                     if (offset < fileSize) {
                         const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
                         const buffer = await readFileAsArrayBuffer(blob);
-                        socket.emit("file-raw", {
+                        pendingChunks.push({
                             uid: receiverID,
                             buffer: buffer
                         });
@@ -67,8 +69,26 @@
                 };
 
                 socket.on("fs-share-ack", async () => {
-                    await sendChunk();
+                    if (pendingChunks.length > 0) {
+                        socket.emit("file-raw", pendingChunks.shift());
+                    } else {
+                        sending = false;
+                    }
                 });
+
+                const chunkInterval = setInterval(() => {
+                    if (offset < fileSize) {
+                        if (pendingChunks.length < 10) { // Maintain a buffer of 10 chunks
+                            sendChunk();
+                        }
+                    } else {
+                        clearInterval(chunkInterval);
+                    }
+                    if (!sending && pendingChunks.length > 0) {
+                        sending = true;
+                        socket.emit("file-raw", pendingChunks.shift());
+                    }
+                }, 10);
 
                 await sendChunk(); // Initial send
             }
