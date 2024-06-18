@@ -40,7 +40,7 @@
             });
 
             async function shareFile(file, progressNode) {
-                const bufferSize = 128 * 1024; 
+                const bufferSize = 64 * 1024; // 64 KB
                 const fileSize = file.size;
                 let offset = 0;
 
@@ -53,8 +53,8 @@
                     }
                 });
 
-                socket.on("fs-share-ack", async () => {
-                    while (offset < fileSize) {
+                const sendChunk = async () => {
+                    if (offset < fileSize) {
                         const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
                         const buffer = await readFileAsArrayBuffer(blob);
                         socket.emit("file-raw", {
@@ -63,11 +63,14 @@
                         });
                         offset += bufferSize;
                         progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
-                        await new Promise(resolve => setTimeout(resolve, 0)); // Prevent blocking the event loop
                     }
+                };
+
+                socket.on("fs-share-ack", async () => {
+                    await sendChunk();
                 });
 
-                socket.emit("fs-start", { uid: receiverID });
+                await sendChunk(); // Initial send
             }
 
             function readFileAsArrayBuffer(blob) {

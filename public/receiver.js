@@ -40,7 +40,7 @@
                 fileShare.buffer.push(data.buffer);
                 fileShare.transmitted += data.buffer.byteLength;
                 let progressPercentage = Math.min(Math.trunc(fileShare.transmitted / fileShare.metadata.total_buffer_size * 100), 100);
-                fileShare.progress_node.innerHTML = progressPercentage + "%"
+                fileShare.progress_node.innerHTML = progressPercentage + "%";
                 if (fileShare.transmitted >= fileShare.metadata.total_buffer_size) {
                     download(new Blob(fileShare.buffer), fileShare.metadata.filename);
                     fileShare = {};
