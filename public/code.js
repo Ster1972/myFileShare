@@ -40,7 +40,7 @@
             });
 
             async function shareFile(file, progressNode) {
-                const bufferSize = 1024 * 1024; // Increased buffer size to 1 MB for faster transfer
+                const bufferSize = 64 * 1024; // Reduced buffer size to 64 KB to prevent large payloads
                 const fileSize = file.size;
                 let offset = 0;
 
@@ -63,6 +63,7 @@
                         });
                         offset += bufferSize;
                         progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
+                        await new Promise(resolve => setTimeout(resolve, 0)); // Prevent blocking the event loop
                     }
                 });
 
