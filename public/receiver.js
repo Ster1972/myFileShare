@@ -8,10 +8,8 @@
         if (senderID.length === 0) {
             return;
         }
-        socket.emit("receiver-join", {
-            uid: socket.id,
-            sender_uid: senderID
-        });
+        socket.emit("receiver-join", { sender_uid: senderID  }); // value given by sender 
+       
         document.querySelector(".join-screen").classList.remove("active");
         document.querySelector(".fs-screen").classList.add("active");
     });
@@ -62,4 +60,3 @@
         }, 100);
     }
 })();
-

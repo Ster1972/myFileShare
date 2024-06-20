@@ -17,24 +17,29 @@ app.use(express.static(path.join(__dirname, "public")));
 io.on("connection", (socket) => {
     console.log("New client connected");
 
-    socket.on("sender-join", (data) => {
-        socket.join(data.uid);
+    socket.on("sender-join", (data) => {  // Sender sends UID for socket.io room
+        socket.join(data.uid);  // create a socket.io room
+        console.log('sender Joins - ', data.uid)
     });
 
     socket.on("receiver-join", (data) => {
         socket.join(data.sender_uid);
-        io.to(data.sender_uid).emit("init", { receiver_uid: socket.id });
+        console.log('receiver Joins - ', data.sender_uid)
+        io.to(data.sender_uid).emit("init", { receiver_uid: data.sender_uid }); // Go to file screen from the join screen
     });
 
     socket.on("file-meta", (data) => {
+        console.log('file-meta - ',data.uid)
         io.to(data.uid).emit("fs-meta", data);
     });
 
     socket.on("fs-start", (data) => {
+        console.log('fs-start - ',data.uid)
         io.to(data.uid).emit("fs-share-ack", { uid: data.uid });
     });
 
     socket.on("file-raw", (data) => {
+        console.log('file-raw - ',data.uid)
         io.to(data.uid).emit("fs-share", data);
     });
 
