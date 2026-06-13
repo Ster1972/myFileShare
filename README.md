@@ -1,0 +1,7 @@
+Understanding the Behavior:
+
+Sender Progress Bar: This progresses based on how quickly the sender can read and send chunks of the file. The sender is only responsible for reading the file and pushing chunks to the server.
+
+Receiver Progress Bar: This progresses based on how quickly the receiver can receive and process the chunks. It includes the time taken to receive chunks from the server and store them in a buffer.
+
+File Assembly: After the receiver has received all chunks, it still needs a bit of time to assemble these chunks into a single file and trigger the download.
