@@ -166,6 +166,66 @@
     });
   });
 
+  async function sendViaSocketIo(file, progressNode) {
+    // Fallback transfer via socket.io relay — chunked binary forwarded by server
+    console.warn('Starting socket.io relay fallback transfer');
+    const fileSize = file.size;
+    const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+    const transferId = `${file.name}::${fileSize}`;
+
+    // prepare to send chunks after receiver acknowledges
+    let ackResolve;
+    const ackPromise = new Promise((res) => { ackResolve = res; });
+
+    const ackHandler = (data) => {
+      if (data && data.uid === receiverID) {
+        ackResolve();
+      }
+    };
+    socket.once('fs-share-ack', ackHandler);
+
+    // send metadata to server for forwarding to receiver
+    socket.emit('file-meta', { uid: receiverID, metadata: { filename: file.name, fileSize, chunkSize: CHUNK_SIZE, totalChunks, transferId, total_buffer_size: fileSize } });
+
+    // wait for ack or timeout 5s
+    const timeout = new Promise((res) => setTimeout(res, 5000));
+    await Promise.race([ackPromise, timeout]);
+
+    // start sending chunks via file-raw events, waiting for ack between chunks to avoid overwhelming server
+    let sent = 0;
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, fileSize);
+      const blob = file.slice(start, end);
+      const payload = await blob.arrayBuffer();
+      // compute SHA-256 digest
+      let digest;
+      try {
+        digest = new Uint8Array(await crypto.subtle.digest('SHA-256', payload));
+      } catch (e) {
+        digest = new Uint8Array(32);
+      }
+      const packet = new ArrayBuffer(4 + 32 + payload.byteLength);
+      const dv = new DataView(packet);
+      dv.setUint32(0, i);
+      const headerArr = new Uint8Array(packet, 4, 32);
+      headerArr.set(digest);
+      const arr = new Uint8Array(packet);
+      arr.set(new Uint8Array(payload), 4 + 32);
+      // send as ArrayBuffer; server will forward to receiver
+      socket.emit('file-raw', { uid: receiverID, buffer: packet });
+      sent++;
+      const pct = Math.min(Math.trunc((sent / totalChunks) * 100), 100);
+      progressNode.bar.value = pct;
+      progressNode.text.innerText = pct + '%';
+      // small delay to yield
+      await new Promise(res => setTimeout(res, 10));
+    }
+    // notify completion
+    socket.emit('fs-complete', { uid: receiverID, transferId });
+    console.log('Socket.io relay transfer complete');
+  }
+
   async function waitForChannelsReady() {
     // wait until all channels are open (with timeout)
     const start = Date.now();

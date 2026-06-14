@@ -2,6 +2,17 @@
   let senderID;
   const socket = io();
 
+  // small helper to trigger download when File System Access API is not available
+  function download(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
   const RECEIVED_REPORT_INTERVAL = 1000; // send received list every N chunks
 
   // WebRTC state
@@ -221,6 +232,38 @@
     } catch (e) {
       console.warn('addIceCandidate failed', e);
     }
+  });
+
+  // Fallback relay handlers for socket.io-based transfer
+  socket.on('fs-meta', async (data) => {
+    try {
+      if (!data || !data.metadata) return;
+      console.log('Received fs-meta via socket relay', data.metadata);
+      // feed into control flow as if metadata arrived over control channel
+      await handleControlMessage(JSON.stringify({ type: 'meta', filename: data.metadata.filename, fileSize: data.metadata.fileSize, chunkSize: data.metadata.chunkSize, totalChunks: data.metadata.totalChunks }));
+      // ask server to notify sender we're ready
+      socket.emit('fs-start', { uid: data.uid });
+    } catch (e) { console.warn('fs-meta handler error', e); }
+  });
+
+  socket.on('fs-share', async (data) => {
+    try {
+      if (!data || !data.buffer) return;
+      // data.buffer expected to be ArrayBuffer
+      console.log('Received fs-share chunk via socket relay, bytes:', data.buffer.byteLength || (data.buffer.length || 0));
+      await handleChunkMessage(data.buffer);
+    } catch (e) { console.error('fs-share handler error', e); }
+  });
+
+  socket.on('fs-complete', async (data) => {
+    try {
+      console.log('fs-complete received', data);
+      // finalize write
+      if (writable) {
+        await writable.close();
+        console.log('File write complete (socket relay)');
+      }
+    } catch (e) { console.warn('fs-complete handler error', e); }
   });
 
   async function handleControlMessage(raw) {
