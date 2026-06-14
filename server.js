@@ -139,6 +139,7 @@ app.get('/rtc-config', async (req, res) => {
     if (process.env.XIRSYS_ENABLED === 'true') {
       try {
         const iceServers = await fetchXirsysIce();
+        console.log('Returning Xirsys ICE servers');
         return res.json({ iceServers });
       } catch (err) {
         console.error('XIRSYS fetch failed, falling back to static TURN/STUN:', err.message);
@@ -146,17 +147,42 @@ app.get('/rtc-config', async (req, res) => {
       }
     }
 
+    // Build iceServers list including the user-provided Xirsys TURN host details
     const iceServers = [];
-    // public Google STUN as fallback
-    iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
-    // append static TURN if configured via env
-    if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD) {
+
+    // include the STUN host you provided
+    iceServers.push({ urls: 'stun:us-turn9.xirsys.com' });
+
+    // prefer USERNAME/CREDENTIAL env names if provided (as in your snippet), else fall back to TURN_* envs
+    const turnUser = process.env.USERNAME || process.env.TURN_USERNAME;
+    const turnCred = process.env.CREDENTIAL || process.env.TURN_PASSWORD;
+
+    if (turnUser && turnCred) {
+      iceServers.push({
+        urls: [
+          'turn:us-turn9.xirsys.com:80?transport=udp',
+          'turn:us-turn9.xirsys.com:3478?transport=udp',
+          'turn:us-turn9.xirsys.com:80?transport=tcp',
+          'turn:us-turn9.xirsys.com:3478?transport=tcp',
+          'turns:us-turn9.xirsys.com:443?transport=tcp',
+          'turns:us-turn9.xirsys.com:5349?transport=tcp'
+        ],
+        username: turnUser,
+        credential: turnCred
+      });
+    } else if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD) {
+      // legacy static TURN envs
       iceServers.push({
         urls: process.env.TURN_URL,
         username: process.env.TURN_USERNAME,
         credential: process.env.TURN_PASSWORD
       });
+    } else {
+      // as a last fallback include Google's public STUN
+      iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
     }
+
+    console.log('Returning ICE servers:', iceServers);
     res.json({ iceServers });
   } catch (e) {
     console.error('rtc-config error', e);

@@ -298,6 +298,9 @@
     let receivedResolve;
     const receivedPromise = new Promise((resolve) => { receivedResolve = resolve; });
 
+    // queue for retransmit requests (NACKs) — declared up-front to avoid race conditions
+    const resendQueue = [];
+
     const receivedHandler = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
@@ -334,8 +337,6 @@
 
     // round-robin schedule across open channels
     const channelCount = openChannels.length || 1;
-
-    const resendQueue = [];
 
     const sendChunk = async (index) => {
       const start = index * CHUNK_SIZE;
