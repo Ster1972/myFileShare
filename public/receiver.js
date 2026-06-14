@@ -112,8 +112,11 @@
   async function fetchRtcConfig() {
     try {
       const r = await fetch('/rtc-config');
-      return await r.json();
+      const json = await r.json();
+      console.log('Fetched RTC config', json);
+      return json;
     } catch (e) {
+      console.warn('Failed to fetch rtc-config, using fallback STUN', e);
       return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     }
   }
@@ -135,6 +138,7 @@
   socket.on('webrtc-offer', async (data) => {
     // create peer, set remote description, create answer
     const cfg = await fetchRtcConfig();
+    console.log('Receiver: creating RTCPeerConnection with ICE servers', cfg.iceServers);
     pc = new RTCPeerConnection({ iceServers: cfg.iceServers });
 
     pc.onicecandidate = (e) => {
@@ -143,10 +147,19 @@
       }
     };
 
+    pc.onconnectionstatechange = () => {
+      console.log('Receiver PeerConnection connectionState:', pc.connectionState);
+    };
+    pc.oniceconnectionstatechange = () => {
+      console.log('Receiver PeerConnection iceConnectionState:', pc.iceConnectionState);
+    };
+
     pc.ondatachannel = (ev) => {
       const ch = ev.channel;
+      console.log('Receiver ondatachannel label=', ch.label);
       if (ch.label === 'control') {
         controlChannel = ch;
+        controlChannel.binaryType = 'arraybuffer';
         controlChannel.onopen = async () => {
           console.log('control channel open');
           // if we already have metadata and a persisted list, send it
@@ -159,19 +172,30 @@
           // refresh saved transfers UI to enable "Send to sender" buttons
           listSavedTransfers();
         };
-        controlChannel.onmessage = (evt) => handleControlMessage(evt.data);
+        controlChannel.onmessage = async (evt) => {
+          // accept either JSON control messages or binary chunks on the control channel (fallback)
+          if (typeof evt.data === 'string') {
+            handleControlMessage(evt.data);
+          } else if (evt.data instanceof ArrayBuffer) {
+            await handleChunkMessage(evt.data);
+          }
+        };
       } else if (ch.label && ch.label.startsWith('data-')) {
         ch.binaryType = 'arraybuffer';
+        ch.onopen = () => console.log('data channel open (receiver)', ch.label);
         ch.onmessage = async (evt) => {
           await handleChunkMessage(evt.data);
         };
+        ch.onclose = () => console.log('data channel closed (receiver)', ch.label);
       }
     };
 
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp: data.sdp });
+      console.log('Receiver set remote description (offer)');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      console.log('Receiver set local description (answer); emitting webrtc-answer');
       socket.emit('webrtc-answer', { uid: senderID, sdp: answer.sdp });
       // drain pending ICE candidates
       if (pendingIceCandidatesRecv.length) {
@@ -209,6 +233,7 @@
     }
 
     if (msg.type === 'meta') {
+      console.log('Received meta from sender', msg);
       metadata = msg;
       // create a stable transferId for persistence
       metadata.transferId = `${metadata.filename}::${metadata.fileSize}`;
@@ -290,8 +315,10 @@
       }
 
       if (!ok) {
+        console.warn('Chunk digest mismatch for index', index);
         // request retransmit for this chunk
         if (controlChannel && controlChannel.readyState === 'open') {
+          console.log('Sending NACK for index', index);
           controlChannel.send(JSON.stringify({ type: 'nack', indices: [index] }));
         }
         return;
@@ -299,12 +326,15 @@
 
       if (writable) {
         const position = index * metadata.chunkSize;
+        console.log('Writing chunk', index, 'position', position, 'bytes', payload.byteLength);
         // write with position
         await writable.write({ type: 'write', position, data: new Uint8Array(payload) });
+        console.log('Wrote chunk', index);
       } else {
         // fallback: store in-memory map
         if (!metadata._parts) metadata._parts = new Map();
         metadata._parts.set(index, payload);
+        console.log('Stored chunk in memory', index);
       }
 
       receivedSet.add(index);

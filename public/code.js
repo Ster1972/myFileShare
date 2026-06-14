@@ -3,7 +3,7 @@
   const socket = io();
 
   const CHUNK_SIZE = 1024 * 1024; // 1MB
-  const PARALLEL_CHANNELS = 8;
+  const PARALLEL_CHANNELS = 4; // reduced for reliability
 
   function generateID() {
     return `${Math.trunc(Math.random() * 999)}-${Math.trunc(Math.random() * 999)}-${Math.trunc(Math.random() * 999)}`;
@@ -29,6 +29,7 @@
 
   async function createPeerConnectionAndOffer() {
     const cfg = await fetchRtcConfig();
+    console.log('Creating RTCPeerConnection with ICE servers:', cfg.iceServers);
     pc = new RTCPeerConnection({ iceServers: cfg.iceServers });
 
     pc.onicecandidate = (e) => {
@@ -37,22 +38,36 @@
       }
     };
 
+    pc.onconnectionstatechange = () => {
+      console.log('PeerConnection connectionState:', pc.connectionState);
+    };
+    pc.oniceconnectionstatechange = () => {
+      console.log('PeerConnection iceConnectionState:', pc.iceConnectionState);
+    };
+
     // control channel for metadata and simple control messages
     controlChannel = pc.createDataChannel('control', { ordered: true });
+    controlChannel.binaryType = 'arraybuffer';
     controlChannel.onopen = () => {
       console.log('control channel open');
       // request list of already received chunks for resumability
       try { controlChannel.send(JSON.stringify({ type: 'received-req' })); } catch (e) { }
     };
     controlChannel.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'received') {
-          // receiver reports received chunks for resume; not used yet
-          console.log('receiver received list length', msg.received?.length);
+      // handle either JSON control messages or binary chunks (fallback)
+      if (typeof ev.data === 'string') {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'received') {
+            // receiver reports received chunks for resume; not used yet
+            console.log('receiver received list length', msg.received?.length);
+          }
+        } catch (err) {
+          console.warn('control channel message parse error', err);
         }
-      } catch (err) {
-        console.warn('control channel message parse error', err);
+      } else if (ev.data instanceof ArrayBuffer) {
+        // forward binary to chunk handler (not defined here; fallback receiver handles it)
+        console.log('Received binary on control channel (unexpected)');
       }
     };
 
@@ -68,8 +83,9 @@
         ch.bufferedAmountLowThreshold = 4 * CHUNK_SIZE;
         pendingChannelsOpen--;
       };
+      ch.onclose = () => { console.log('data channel closed', i); };
       ch.onbufferedamountlow = () => {
-        // could resume sending on this channel
+        console.log('data channel bufferedAmountLow', i);
       };
       ch.onerror = (e) => console.error('data channel error', e);
       dataChannels.push(ch);
@@ -77,6 +93,7 @@
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    console.log('Local description set; emitting webrtc-offer');
     socket.emit('webrtc-offer', { uid: receiverID, sdp: offer.sdp });
   }
 
@@ -153,9 +170,11 @@
     // wait until all channels are open (with timeout)
     const start = Date.now();
     while (pendingChannelsOpen > 0 && Date.now() - start < 30000) {
+      console.log('Waiting for data channels to open, remaining:', pendingChannelsOpen);
       await new Promise(r => setTimeout(r, 100));
     }
-    if (pendingChannelsOpen > 0) console.warn('Some channels did not open in time');
+    if (pendingChannelsOpen > 0) console.warn('Some channels did not open in time, remaining:', pendingChannelsOpen);
+    else console.log('All data channels opened');
   }
 
   async function sendFileOverDataChannels(file, progressNode) {
@@ -174,7 +193,13 @@
       openChannels = dataChannels.filter(ch => ch && ch.readyState === 'open');
     }
     if (openChannels.length === 0) {
-      throw new Error('No data channels available to send');
+      // fallback: if controlChannel is open, use it as a single binary channel
+      if (controlChannel && controlChannel.readyState === 'open') {
+        openChannels = [controlChannel];
+        console.warn('Falling back to control channel for binary transfer');
+      } else {
+        throw new Error('No data channels available to send');
+      }
     }
 
     const fileSize = file.size;
@@ -191,9 +216,21 @@
       throw new Error('Control channel not open');
     }
 
+    // ensure control channel is open before sending meta
+    if (!controlChannel || controlChannel.readyState !== 'open') {
+      const ctrlStart = Date.now();
+      while ((!controlChannel || controlChannel.readyState !== 'open') && (Date.now() - ctrlStart) < 5000) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
+    if (!controlChannel || controlChannel.readyState !== 'open') {
+      throw new Error('Control channel not open');
+    }
+
     // send metadata over control channel
     const transferId = `${file.name}::${fileSize}`;
     const meta = { type: 'meta', filename: file.name, fileSize, chunkSize: CHUNK_SIZE, totalChunks, transferId };
+    console.log('Sending meta to receiver', meta);
     controlChannel.send(JSON.stringify(meta));
 
     // wait for receiver to send back list of already received chunks (resumability)
@@ -306,6 +343,7 @@
     // notify receiver of completion
     controlChannel.send(JSON.stringify({ type: 'complete' }));
     controlChannel.removeEventListener('message', receivedHandler);
+  console.log('File transfer finished; sentChunks:', sentChunks, 'totalChunks:', totalChunks);
 
   }
 
