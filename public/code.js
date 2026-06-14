@@ -2,9 +2,114 @@
   let receiverID = null;
   const socket = io();
 
+  const CHUNK_SIZE = 1024 * 1024; // 1MB
+  const PARALLEL_CHANNELS = 8;
+
   function generateID() {
     return `${Math.trunc(Math.random() * 999)}-${Math.trunc(Math.random() * 999)}-${Math.trunc(Math.random() * 999)}`;
   }
+
+  // WebRTC state
+  let pc = null;
+  let dataChannels = [];
+  let controlChannel = null;
+  let pendingChannelsOpen = 0;
+
+  async function fetchRtcConfig() {
+    try {
+      const r = await fetch('/rtc-config');
+      return await r.json();
+    } catch (e) {
+      return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    }
+  }
+
+  // queue ICE candidates received before remoteDescription is set
+  let pendingIceCandidates = [];
+
+  async function createPeerConnectionAndOffer() {
+    const cfg = await fetchRtcConfig();
+    pc = new RTCPeerConnection({ iceServers: cfg.iceServers });
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        socket.emit('webrtc-ice', { uid: receiverID, candidate: e.candidate });
+      }
+    };
+
+    // control channel for metadata and simple control messages
+    controlChannel = pc.createDataChannel('control', { ordered: true });
+    controlChannel.onopen = () => {
+      console.log('control channel open');
+      // request list of already received chunks for resumability
+      try { controlChannel.send(JSON.stringify({ type: 'received-req' })); } catch (e) { }
+    };
+    controlChannel.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'received') {
+          // receiver reports received chunks for resume; not used yet
+          console.log('receiver received list length', msg.received?.length);
+        }
+      } catch (err) {
+        console.warn('control channel message parse error', err);
+      }
+    };
+
+    // create parallel data channels
+    dataChannels = [];
+    pendingChannelsOpen = PARALLEL_CHANNELS;
+
+    for (let i = 0; i < PARALLEL_CHANNELS; i++) {
+      const ch = pc.createDataChannel('data-' + i, { ordered: true });
+      ch.binaryType = 'arraybuffer';
+      ch.onopen = () => {
+        console.log('data channel open', i);
+        ch.bufferedAmountLowThreshold = 4 * CHUNK_SIZE;
+        pendingChannelsOpen--;
+      };
+      ch.onbufferedamountlow = () => {
+        // could resume sending on this channel
+      };
+      ch.onerror = (e) => console.error('data channel error', e);
+      dataChannels.push(ch);
+    }
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit('webrtc-offer', { uid: receiverID, sdp: offer.sdp });
+  }
+
+  socket.on('webrtc-answer', async (data) => {
+    if (!pc) return;
+    try {
+      await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
+      console.log('Remote description set (answer)');
+      // drain any queued ICE candidates
+      if (pendingIceCandidates.length) {
+        for (const cand of pendingIceCandidates) {
+          try { await pc.addIceCandidate(cand); } catch (e) { console.warn('addIceCandidate (drain) failed', e); }
+        }
+        pendingIceCandidates = [];
+      }
+    } catch (e) {
+      console.error('Error setting remote description', e);
+    }
+  });
+
+  socket.on('webrtc-ice', async (data) => {
+    if (!pc || !data?.candidate) return;
+    // if remoteDescription not set yet, queue candidate
+    if (!pc.remoteDescription || !pc.remoteDescription.type) {
+      pendingIceCandidates.push(data.candidate);
+      return;
+    }
+    try {
+      await pc.addIceCandidate(data.candidate);
+    } catch (e) {
+      console.warn('addIceCandidate failed', e);
+    }
+  });
 
   document.querySelector("#sender-start-con-btn").addEventListener("click", function () {
     const joinID = generateID();
@@ -14,10 +119,17 @@
     socket.emit("sender-join", { uid: joinID });
   });
 
-  socket.on("init", function (data) {
+  socket.on("init", async function (data) {
     receiverID = data?.receiver_uid ?? null;
     document.querySelector(".join-screen").classList.remove("active");
     document.querySelector(".fs-screen").classList.add("active");
+
+    // start WebRTC negotiation as the initiator (sender)
+    await createPeerConnectionAndOffer();
+  });
+
+  socket.on('webrtc-offer', async (data) => {
+    // ignore unexpected incoming offers (negotiation is sender-initiated)
   });
 
   document.querySelector("#file-input").addEventListener("change", function (e) {
@@ -26,58 +138,147 @@
 
     const el = document.createElement("div");
     el.classList.add("item");
-    el.innerHTML = `<div class="progress">0%</div><div class="filename">${file.name}</div>`;
+    el.innerHTML = `<progress max="100" value="0"></progress><div class="progress-text">0%</div><div class="filename">${file.name}</div>`;
     document.querySelector(".files-list").appendChild(el);
+    const progressBar = el.querySelector('progress');
+    const progressText = el.querySelector('.progress-text');
 
-    shareFile(file, el.querySelector(".progress")).catch(err => {
-      console.error("shareFile error", err);
-      el.querySelector(".progress").innerText = "Error";
+    sendFileOverDataChannels(file, { bar: progressBar, text: progressText }).catch(err => {
+      console.error("sendFile error", err);
+      progressText.innerText = "Error";
     });
   });
 
-  async function shareFile(file, progressNode) {
-    if (!receiverID) {
-      progressNode.innerText = "No receiver";
+  async function waitForChannelsReady() {
+    // wait until all channels are open (with timeout)
+    const start = Date.now();
+    while (pendingChannelsOpen > 0 && Date.now() - start < 30000) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (pendingChannelsOpen > 0) console.warn('Some channels did not open in time');
+  }
+
+  async function sendFileOverDataChannels(file, progressNode) {
+    if (!pc) {
+      progressNode.text.innerText = 'No peer connection';
       return;
     }
 
-    const bufferSize = 64 * 1024;
+    await waitForChannelsReady();
+
     const fileSize = file.size;
-    let offset = 0;
+    const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
 
-    socket.emit("file-meta", {
-      uid: receiverID,
-      metadata: {
-        filename: file.name,
-        total_buffer_size: fileSize,
-        buffer_size: bufferSize
+    // send metadata over control channel
+    const transferId = `${file.name}::${fileSize}`;
+    const meta = { type: 'meta', filename: file.name, fileSize, chunkSize: CHUNK_SIZE, totalChunks, transferId };
+    controlChannel.send(JSON.stringify(meta));
+
+    // wait for receiver to send back list of already received chunks (resumability)
+    let receivedSet = new Set();
+    let receivedResolve;
+    const receivedPromise = new Promise((resolve) => { receivedResolve = resolve; });
+
+    const receivedHandler = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'received') {
+          receivedSet = new Set((msg.received || []).map(x => Number(x)));
+          console.log('initial received set length', receivedSet.size);
+          receivedResolve();
+        } else if (msg.type === 'nack') {
+          // receiver requests retransmit of specific indices
+          (msg.indices || []).forEach(idx => {
+            // trigger retransmit asynchronously
+            resendQueue.push(Number(idx));
+          });
+        }
+      } catch (err) {
+        console.warn('control channel message parse error', err);
       }
-    });
+    };
 
-    // Wait for ack once, per-file, as a Promise
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("fs-share-ack timeout")), 10000);
-      socket.once("fs-share-ack", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
+    controlChannel.addEventListener('message', receivedHandler);
 
-    while (offset < fileSize) {
-      const blob = file.slice(offset, Math.min(offset + bufferSize, fileSize));
-      // modern API:
-      const buffer = await blob.arrayBuffer();
-      // include sequence number/offset to help receiver reassemble
-      socket.emit("file-raw", {
-        uid: receiverID,
-        buffer,
-        offset
-      });
-      offset += bufferSize;
-      progressNode.innerText = Math.min(Math.trunc((offset / fileSize) * 100), 100) + "%";
+    // timeout: if no received list in 5s, continue
+    const rpTimeout = setTimeout(() => receivedResolve(), 5000);
+    await receivedPromise;
+    clearTimeout(rpTimeout);
 
-      // lightweight yield to avoid blocking UI; consider per-chunk ack for stronger backpressure
-      await new Promise(resolve => setTimeout(resolve, 0));
+    let sentChunks = 0;
+
+    // build list of indices to send excluding already received
+    const sendIndices = [];
+    for (let i = 0; i < totalChunks; i++) {
+      if (!receivedSet.has(i)) sendIndices.push(i);
     }
+
+    // round-robin schedule across channels
+    const channelCount = dataChannels.length || 1;
+
+    const resendQueue = [];
+
+    const sendChunk = async (index) => {
+      const start = index * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, fileSize);
+      const blob = file.slice(start, end);
+      const payload = await blob.arrayBuffer();
+
+      // compute SHA-256 digest
+      let digest;
+      try {
+        digest = new Uint8Array(await crypto.subtle.digest('SHA-256', payload));
+      } catch (e) {
+        // fallback: zeroed digest
+        digest = new Uint8Array(32);
+      }
+
+      // create header: 4 bytes chunk index + 32-byte digest
+      const packet = new ArrayBuffer(4 + 32 + payload.byteLength);
+      const dv = new DataView(packet);
+      dv.setUint32(0, index);
+      const headerArr = new Uint8Array(packet, 4, 32);
+      headerArr.set(digest);
+      const arr = new Uint8Array(packet);
+      arr.set(new Uint8Array(payload), 4 + 32);
+
+      const ch = dataChannels[index % channelCount];
+      // backpressure: wait if channel bufferedAmount too high
+      while (ch.bufferedAmount > 16 * CHUNK_SIZE) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      ch.send(packet);
+      sentChunks++;
+      // update progress bar and text
+      const pct = Math.min(Math.trunc((sentChunks / totalChunks) * 100), 100);
+      progressNode.bar.value = pct;
+      progressNode.text.innerText = pct + "%";
+    };
+
+    // producers consume from sendIndices
+    let nextIndexPtr = 0;
+    const producers = [];
+    for (let i = 0; i < channelCount; i++) {
+      producers.push((async () => {
+        while (true) {
+          let idx;
+          // prioritize resends
+          if (resendQueue.length > 0) {
+            idx = resendQueue.shift();
+          } else {
+            idx = sendIndices[nextIndexPtr++];
+          }
+          if (idx === undefined) break;
+          await sendChunk(idx);
+        }
+      })());
+    }
+
+    await Promise.all(producers);
+    // notify receiver of completion
+    controlChannel.send(JSON.stringify({ type: 'complete' }));
+    controlChannel.removeEventListener('message', receivedHandler);
+
   }
+
 })();
