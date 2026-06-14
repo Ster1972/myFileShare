@@ -151,7 +151,11 @@ app.get('/rtc-config', async (req, res) => {
     iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
     // append static TURN if configured via env
     if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD) {
-      iceServers.push(iceServers: [{   urls: [ "stun:us-turn9.xirsys.com" ]}, {   username: process.env.USERNAME,   credential: process.env.CREDENTIAL,   urls: [       "turn:us-turn9.xirsys.com:80?transport=udp",       "turn:us-turn9.xirsys.com:3478?transport=udp",       "turn:us-turn9.xirsys.com:80?transport=tcp",       "turn:us-turn9.xirsys.com:3478?transport=tcp",       "turns:us-turn9.xirsys.com:443?transport=tcp",       "turns:us-turn9.xirsys.com:5349?transport=tcp"   ]}]);
+      iceServers.push({
+        urls: process.env.TURN_URL,
+        username: process.env.TURN_USERNAME,
+        credential: process.env.TURN_PASSWORD
+      });
     }
     res.json({ iceServers });
   } catch (e) {
