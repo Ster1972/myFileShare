@@ -166,8 +166,30 @@
 
     await waitForChannelsReady();
 
+    // collect open channels (after waiting). If none open within 5s, fail.
+    let openChannels = dataChannels.filter(ch => ch && ch.readyState === 'open');
+    const openStart = Date.now();
+    while (openChannels.length === 0 && (Date.now() - openStart) < 5000) {
+      await new Promise(r => setTimeout(r, 100));
+      openChannels = dataChannels.filter(ch => ch && ch.readyState === 'open');
+    }
+    if (openChannels.length === 0) {
+      throw new Error('No data channels available to send');
+    }
+
     const fileSize = file.size;
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+
+    // ensure control channel is open before sending meta
+    if (!controlChannel || controlChannel.readyState !== 'open') {
+      const ctrlStart = Date.now();
+      while ((!controlChannel || controlChannel.readyState !== 'open') && (Date.now() - ctrlStart) < 5000) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
+    if (!controlChannel || controlChannel.readyState !== 'open') {
+      throw new Error('Control channel not open');
+    }
 
     // send metadata over control channel
     const transferId = `${file.name}::${fileSize}`;
@@ -213,8 +235,8 @@
       if (!receivedSet.has(i)) sendIndices.push(i);
     }
 
-    // round-robin schedule across channels
-    const channelCount = dataChannels.length || 1;
+    // round-robin schedule across open channels
+    const channelCount = openChannels.length || 1;
 
     const resendQueue = [];
 
@@ -242,7 +264,13 @@
       const arr = new Uint8Array(packet);
       arr.set(new Uint8Array(payload), 4 + 32);
 
-      const ch = dataChannels[index % channelCount];
+      const ch = openChannels[index % channelCount];
+      // wait for channel to be open (short timeout)
+      const chStart = Date.now();
+      while (ch.readyState !== 'open' && (Date.now() - chStart) < 5000) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      if (ch.readyState !== 'open') throw new Error('Data channel not open');
       // backpressure: wait if channel bufferedAmount too high
       while (ch.bufferedAmount > 16 * CHUNK_SIZE) {
         await new Promise(r => setTimeout(r, 50));
