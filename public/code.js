@@ -239,6 +239,10 @@
     const start = Date.now();
     while (pendingChannelsOpen > 0 && Date.now() - start < 30000) {
       console.log('Waiting for data channels to open, remaining:', pendingChannelsOpen);
+      if (pc && (pc.connectionState === 'failed' || pc.iceConnectionState === 'failed')) {
+        console.warn('PeerConnection failed while waiting for channels');
+        break;
+      }
       await new Promise(r => setTimeout(r, 100));
     }
     if (pendingChannelsOpen > 0) console.warn('Some channels did not open in time, remaining:', pendingChannelsOpen);
@@ -249,6 +253,11 @@
     if (!pc) {
       progressNode.text.innerText = 'No peer connection';
       return;
+    }
+
+    if (pc.connectionState === 'failed' || pc.iceConnectionState === 'failed') {
+      console.warn('PeerConnection already failed before sending, using fallback');
+      return await sendViaSocketIo(file, progressNode);
     }
 
     await waitForChannelsReady();

@@ -159,55 +159,14 @@ app.get('/rtc-config', async (req, res) => {
   try {
     // prefer Xirsys if explicitly enabled
     if (process.env.XIRSYS_ENABLED === 'true') {
-      try {
-        const iceServers = await fetchXirsysIce();
-        console.log('Returning Xirsys ICE servers');
-        return res.json({ iceServers });
-      } catch (err) {
-        console.error('XIRSYS fetch failed, falling back to static TURN/STUN:', err.message);
-        // continue to fallback
-      }
+      const iceServers = await fetchXirsysIce();
+      console.log('Returning Xirsys ICE servers');
+      return res.json({ iceServers });
     }
 
-    // Build iceServers list including the user-provided Xirsys TURN host details
-    const iceServers = [];
-
-    // include the STUN host you provided
-    iceServers.push({ urls: 'stun:us-turn9.xirsys.com' });
-
-    // use specific TURN_* env names to avoid conflicts with system variables
-    const turnUser = process.env.TURN_USERNAME;
-    const turnCred = process.env.TURN_PASSWORD;
-
-    if (turnUser && turnCred) {
-      iceServers.push({
-        urls: [
-          'turn:us-turn9.xirsys.com:80?transport=udp',
-          'turn:us-turn9.xirsys.com:3478?transport=udp',
-          'turn:us-turn9.xirsys.com:80?transport=tcp',
-          'turn:us-turn9.xirsys.com:3478?transport=tcp',
-          'turns:us-turn9.xirsys.com:443?transport=tcp',
-          'turns:us-turn9.xirsys.com:5349?transport=tcp'
-        ],
-        username: turnUser,
-        credential: turnCred
-      });
-    } else if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD) {
-      // legacy static TURN envs
-      iceServers.push({
-        urls: process.env.TURN_URL,
-        username: process.env.TURN_USERNAME,
-        credential: process.env.TURN_PASSWORD
-      });
-    } else {
-      // as a last fallback include Google's public STUN
-      iceServers.push({ urls: 'stun:stun.l.google.com:19302' });
-    }
-
-    console.log('Returning ICE servers:', iceServers);
-    res.json({ iceServers });
+    throw new Error('XIRSYS_ENABLED must be true and XIRSYS credentials must be configured');
   } catch (e) {
     console.error('rtc-config error', e);
-    res.status(500).json({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    res.status(500).json({ error: 'rtc-config unavailable' });
   }
 });
