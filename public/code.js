@@ -40,9 +40,17 @@
 
     pc.onconnectionstatechange = () => {
       console.log('PeerConnection connectionState:', pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        console.error('PeerConnection failed - will fallback to socket.io relay');
+      }
     };
     pc.oniceconnectionstatechange = () => {
       console.log('PeerConnection iceConnectionState:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.error('ICE connection failed');
+      } else if (pc.iceConnectionState === 'disconnected') {
+        console.warn('ICE connection disconnected');
+      }
     };
 
     // control channel for metadata and simple control messages
@@ -258,7 +266,8 @@
         openChannels = [controlChannel];
         console.warn('Falling back to control channel for binary transfer');
       } else {
-        throw new Error('No data channels available to send');
+        console.warn('WebRTC data channels failed to open, falling back to socket.io relay transfer');
+        return await sendViaSocketIo(file, progressNode);
       }
     }
 

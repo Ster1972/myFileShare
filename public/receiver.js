@@ -160,17 +160,24 @@
 
     pc.onconnectionstatechange = () => {
       console.log('Receiver PeerConnection connectionState:', pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        console.error('Receiver PeerConnection failed');
+      }
     };
     pc.oniceconnectionstatechange = () => {
       console.log('Receiver PeerConnection iceConnectionState:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.error('Receiver ICE connection failed');
+      }
     };
 
     pc.ondatachannel = (ev) => {
       const ch = ev.channel;
       console.log('Receiver ondatachannel label=', ch.label);
+      ch.binaryType = 'arraybuffer';
+      ch.onerror = (e) => console.error('Data channel error (receiver)', ch.label, e);
       if (ch.label === 'control') {
         controlChannel = ch;
-        controlChannel.binaryType = 'arraybuffer';
         controlChannel.onopen = async () => {
           console.log('control channel open');
           // if we already have metadata and a persisted list, send it
@@ -192,7 +199,6 @@
           }
         };
       } else if (ch.label && ch.label.startsWith('data-')) {
-        ch.binaryType = 'arraybuffer';
         ch.onopen = () => console.log('data channel open (receiver)', ch.label);
         ch.onmessage = async (evt) => {
           await handleChunkMessage(evt.data);
