@@ -51,7 +51,8 @@ io.on("connection", (socket) => {
     if (!validUid(data.sender_uid)) return socket.emit("error", { message: "invalid uid" });
     socket.join(data.sender_uid);
     console.log("receiver joins", data.sender_uid);
-    io.to(data.sender_uid).emit("init", { receiver_uid: data.sender_uid });
+    // notify sender that receiver has joined (send both IDs for debugging/future use)
+    io.to(data.sender_uid).emit("init", { receiver_uid: data.sender_uid, receiver_socket_id: socket.id });
   });
 
   // legacy file-relay events (kept for fallback compatibility)
@@ -66,28 +67,28 @@ io.on("connection", (socket) => {
   });
 
   socket.on("fs-start", (data = {}) => {
-    if (!validUid(data.uid)) return;
+    if (!validUid(data.uid)) return socket.emit("error", { message: "invalid uid" });
     io.to(data.uid).emit("fs-share-ack", { uid: data.uid });
   });
 
   socket.on("file-raw", (data = {}) => {
-    if (!validUid(data.uid) || !data.buffer) return;
+    if (!validUid(data.uid) || !data.buffer) return socket.emit("error", { message: "invalid data" });
     io.to(data.uid).emit("fs-share", data);
   });
 
   // WebRTC signaling: forward offer/answer/ICE to the room
   socket.on('webrtc-offer', (data = {}) => {
-    if (!validUid(data.uid) || !data.sdp) return;
+    if (!validUid(data.uid) || !data.sdp || typeof data.sdp !== 'string') return socket.emit('error', { message: 'invalid offer data' });
     io.to(data.uid).emit('webrtc-offer', { sdp: data.sdp, from: socket.id });
   });
 
   socket.on('webrtc-answer', (data = {}) => {
-    if (!validUid(data.uid) || !data.sdp) return;
+    if (!validUid(data.uid) || !data.sdp || typeof data.sdp !== 'string') return socket.emit('error', { message: 'invalid answer data' });
     io.to(data.uid).emit('webrtc-answer', { sdp: data.sdp, from: socket.id });
   });
 
   socket.on('webrtc-ice', (data = {}) => {
-    if (!validUid(data.uid) || !data.candidate) return;
+    if (!validUid(data.uid) || !data.candidate || typeof data.candidate !== 'object') return socket.emit('error', { message: 'invalid ice data' });
     io.to(data.uid).emit('webrtc-ice', { candidate: data.candidate, from: socket.id });
   });
 
@@ -104,10 +105,20 @@ server.listen(PORT, () => {
   console.log(`Server is running on port: ${PORT}`);
 });
 
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
 // Simple cache for Xirsys responses
 let xirsysCache = null;
-let xirsysCacheTs = 0;
+let xirsysFetchPromise = null;
 const XIRSYS_CACHE_TTL = 60 * 1000; // 60s
+let xirsysCacheTs = 0;
 
 // Helper to fetch ICE servers from Xirsys
 async function fetchXirsysIce() {
@@ -120,16 +131,27 @@ async function fetchXirsysIce() {
   const now = Date.now();
   if (xirsysCache && (now - xirsysCacheTs) < XIRSYS_CACHE_TTL) return xirsysCache;
 
-  const auth = Buffer.from(`${user}:${secret}`).toString('base64');
-  const resp = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, method: 'GET' });
-  if (!resp.ok) throw new Error(`Xirsys fetch failed: ${resp.status}`);
-  const json = await resp.json();
-  // Xirsys returns various shapes; try common paths
-  const ice = json?.v?.iceServers || json?.iceServers || json?.s?.iceServers || json?.d?.iceServers || null;
-  if (!ice) throw new Error('No iceServers in Xirsys response');
-  xirsysCache = ice;
-  xirsysCacheTs = now;
-  return ice;
+  // prevent concurrent fetches
+  if (xirsysFetchPromise) return xirsysFetchPromise;
+
+  xirsysFetchPromise = (async () => {
+    try {
+      const auth = Buffer.from(`${user}:${secret}`).toString('base64');
+      const resp = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, method: 'GET' });
+      if (!resp.ok) throw new Error(`Xirsys fetch failed: ${resp.status}`);
+      const json = await resp.json();
+      // Xirsys returns various shapes; try common paths
+      const ice = json?.v?.iceServers || json?.iceServers || json?.s?.iceServers || json?.d?.iceServers || null;
+      if (!ice) throw new Error('No iceServers in Xirsys response');
+      xirsysCache = ice;
+      xirsysCacheTs = now;
+      return ice;
+    } finally {
+      xirsysFetchPromise = null;
+    }
+  })();
+
+  return xirsysFetchPromise;
 }
 
 // Endpoint to return ICE servers configuration (STUN/TURN)
@@ -153,9 +175,9 @@ app.get('/rtc-config', async (req, res) => {
     // include the STUN host you provided
     iceServers.push({ urls: 'stun:us-turn9.xirsys.com' });
 
-    // prefer USERNAME/CREDENTIAL env names if provided (as in your snippet), else fall back to TURN_* envs
-    const turnUser = process.env.USERNAME || process.env.TURN_USERNAME;
-    const turnCred = process.env.CREDENTIAL || process.env.TURN_PASSWORD;
+    // use specific TURN_* env names to avoid conflicts with system variables
+    const turnUser = process.env.TURN_USERNAME;
+    const turnCred = process.env.TURN_PASSWORD;
 
     if (turnUser && turnCred) {
       iceServers.push({
