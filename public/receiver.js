@@ -27,16 +27,134 @@
   // Simple IndexedDB helpers for persistence of received indices
   function openDb() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('myfileshare-db', 1);
+      const req = indexedDB.open('myfileshare-db', 2);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains('received')) {
           db.createObjectStore('received', { keyPath: 'id' });
         }
+        // object store for chunk payloads: compound key [transferId, index]
+        if (!db.objectStoreNames.contains('chunks')) {
+          const store = db.createObjectStore('chunks', { keyPath: ['transferId', 'index'] });
+          store.createIndex('byTransfer', 'transferId', { unique: false });
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
+  }
+
+  // Chunk persistence helpers
+  async function saveChunkToDb(transferId, index, payload) {
+    try {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('chunks', 'readwrite');
+        const store = tx.objectStore('chunks');
+        // store payload as ArrayBuffer (IDB supports it)
+        store.put({ transferId, index, payload });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('saveChunkToDb failed', e);
+    }
+  }
+
+  async function getChunksForTransfer(transferId) {
+    try {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('chunks', 'readonly');
+        const store = tx.objectStore('chunks');
+        const idx = store.index('byTransfer');
+        const req = idx.getAll(IDBKeyRange.only(transferId));
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function deleteChunksForTransfer(transferId) {
+    try {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('chunks', 'readwrite');
+        const store = tx.objectStore('chunks');
+        const idx = store.index('byTransfer');
+        const req = idx.openCursor(IDBKeyRange.only(transferId));
+        req.onsuccess = (ev) => {
+          const cursor = ev.target.result;
+          if (!cursor) return;
+          cursor.delete();
+          cursor.continue();
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('deleteChunksForTransfer failed', e);
+    }
+  }
+
+  // finalize transfer: close writable (with retries) or assemble from DB, then cleanup
+  async function finalizeTransfer() {
+    if (!metadata || !metadata.transferId) return;
+    const transferId = metadata.transferId;
+    try {
+      if (writable) {
+        // attempt to close with retries
+        let lastErr = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await writable.close();
+            console.log('File write complete (writable closed)');
+            lastErr = null;
+            break;
+          } catch (e) {
+            lastErr = e;
+            console.warn('writable.close() failed, attempt', attempt, e);
+            await new Promise(r => setTimeout(r, 500 * attempt));
+          }
+        }
+        if (lastErr) throw lastErr;
+      } else {
+        console.log('No writable; assembling from persisted chunks');
+        const chunks = await getChunksForTransfer(transferId);
+        if (!chunks || chunks.length === 0) {
+          console.warn('No persisted chunks found to assemble');
+        } else {
+          const ordered = chunks.sort((a, b) => a.index - b.index).map(c => c.payload instanceof Blob ? c.payload : new Blob([c.payload]));
+          const blob = new Blob(ordered);
+          download(blob, metadata.filename);
+          console.log('Assembled and downloaded file from IndexedDB chunks');
+        }
+      }
+    } catch (e) {
+      console.error('finalizeTransfer failed', e);
+      // do not delete persisted data if close/assembly failed
+      return;
+    }
+
+    // cleanup persisted chunks and received list
+    try {
+      await deleteChunksForTransfer(transferId);
+      const db2 = await openDb();
+      const tx2 = db2.transaction('received', 'readwrite');
+      tx2.objectStore('received').delete(transferId);
+      tx2.oncomplete = () => listSavedTransfers();
+    } catch (e) {
+      console.warn('Cleanup after finalizeTransfer failed', e);
+    }
+
+    // reset state
+    writable = null;
+    fileHandle = null;
+    metadata = null;
+    receivedSet = new Set();
+    receivedCount = 0;
   }
 
   async function loadReceivedList(transferId) {
@@ -266,11 +384,8 @@
   socket.on('fs-complete', async (data) => {
     try {
       console.log('fs-complete received', data);
-      // finalize write
-      if (writable) {
-        await writable.close();
-        console.log('File write complete (socket relay)');
-      }
+      // finalize write or assemble
+      await finalizeTransfer();
     } catch (e) { console.warn('fs-complete handler error', e); }
   });
 
@@ -326,14 +441,7 @@
       }
 
     } else if (msg.type === 'complete') {
-      // finalize writable
-      if (writable) {
-        await writable.close();
-        console.log('File write complete');
-      } else {
-        // fallback: assemble in-memory blobs and download
-        console.warn('Writable not available; in-memory assembly required');
-      }
+      await finalizeTransfer();
     } else if (msg.type === 'received-req') {
       // sender requests list of received chunks for resume support
       const list = Array.from(receivedSet);
@@ -375,6 +483,15 @@
         return;
       }
 
+      // persist chunk to IndexedDB for resumability
+      try {
+        if (metadata && metadata.transferId) {
+          await saveChunkToDb(metadata.transferId, index, payload);
+        }
+      } catch (e) {
+        console.warn('Failed to persist chunk to IndexedDB', e);
+      }
+
       if (writable) {
         const position = index * metadata.chunkSize;
         console.log('Writing chunk', index, 'position', position, 'bytes', payload.byteLength);
@@ -382,10 +499,8 @@
         await writable.write({ type: 'write', position, data: new Uint8Array(payload) });
         console.log('Wrote chunk', index);
       } else {
-        // fallback: store in-memory map
-        if (!metadata._parts) metadata._parts = new Map();
-        metadata._parts.set(index, payload);
-        console.log('Stored chunk in memory', index);
+        // no in-memory accumulation anymore; rely on IndexedDB
+        console.log('Persisted chunk to IndexedDB', index);
       }
 
       receivedSet.add(index);
@@ -412,15 +527,7 @@
       if (receivedCount >= metadata.totalChunks) {
         // save final state
         try { await saveReceivedList(metadata.transferId, Array.from(receivedSet)); listSavedTransfers(); } catch(e) {}
-        if (writable) {
-          await writable.close();
-          console.log('File write complete');
-        } else {
-          // assemble in-memory blobs
-          const ordered = Array.from(metadata._parts.entries()).sort((a, b) => a[0] - b[0]).map(p => p[1]);
-          const blob = new Blob(ordered);
-          download(blob, metadata.filename);
-        }
+        await finalizeTransfer();
       }
 
     } catch (e) {
