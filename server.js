@@ -51,8 +51,8 @@ io.on("connection", (socket) => {
     if (!validUid(data.sender_uid)) return socket.emit("error", { message: "invalid uid" });
     socket.join(data.sender_uid);
     console.log("receiver joins", data.sender_uid);
-    // notify sender that receiver has joined (send both IDs for debugging/future use)
-    io.to(data.sender_uid).emit("init", { receiver_uid: data.sender_uid, receiver_socket_id: socket.id });
+    // notify sender that receiver has joined (exclude this socket)
+    socket.to(data.sender_uid).emit("init", { receiver_uid: data.sender_uid, receiver_socket_id: socket.id });
   });
 
   // legacy file-relay events (kept for fallback compatibility)
@@ -63,33 +63,33 @@ io.on("connection", (socket) => {
     if (typeof meta.total_buffer_size !== "number") {
       return socket.emit("error", { message: "invalid file size" });
     }
-    io.to(data.uid).emit("fs-meta", data);
+    socket.to(data.uid).emit("fs-meta", data);
   });
 
   socket.on("fs-start", (data = {}) => {
     if (!validUid(data.uid)) return socket.emit("error", { message: "invalid uid" });
-    io.to(data.uid).emit("fs-share-ack", { uid: data.uid });
+    socket.to(data.uid).emit("fs-share-ack", { uid: data.uid });
   });
 
   socket.on("file-raw", (data = {}) => {
     if (!validUid(data.uid) || !data.buffer) return socket.emit("error", { message: "invalid data" });
-    io.to(data.uid).emit("fs-share", data);
+    socket.to(data.uid).emit("fs-share", data);
   });
 
   // WebRTC signaling: forward offer/answer/ICE to the room
   socket.on('webrtc-offer', (data = {}) => {
     if (!validUid(data.uid) || !data.sdp || typeof data.sdp !== 'string') return socket.emit('error', { message: 'invalid offer data' });
-    io.to(data.uid).emit('webrtc-offer', { sdp: data.sdp, from: socket.id });
+    socket.to(data.uid).emit('webrtc-offer', { sdp: data.sdp, from: socket.id });
   });
 
   socket.on('webrtc-answer', (data = {}) => {
     if (!validUid(data.uid) || !data.sdp || typeof data.sdp !== 'string') return socket.emit('error', { message: 'invalid answer data' });
-    io.to(data.uid).emit('webrtc-answer', { sdp: data.sdp, from: socket.id });
+    socket.to(data.uid).emit('webrtc-answer', { sdp: data.sdp, from: socket.id });
   });
 
   socket.on('webrtc-ice', (data = {}) => {
     if (!validUid(data.uid) || !data.candidate || typeof data.candidate !== 'object') return socket.emit('error', { message: 'invalid ice data' });
-    io.to(data.uid).emit('webrtc-ice', { candidate: data.candidate, from: socket.id });
+    socket.to(data.uid).emit('webrtc-ice', { candidate: data.candidate, from: socket.id });
   });
 
   socket.on("disconnect", (reason) => {
