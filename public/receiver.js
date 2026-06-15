@@ -23,11 +23,13 @@
   let metadata = null;
   let receivedSet = new Set();
   let receivedCount = 0;
+  let transferCompleteSignal = false;
+  let transferFinalized = false;
 
   // Simple IndexedDB helpers for persistence of received indices
   function openDb() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('myfileshare-db', 2);
+      const req = indexedDB.open('myfileshare-db', 3);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains('received')) {
@@ -67,12 +69,27 @@
       return new Promise((resolve, reject) => {
         const tx = db.transaction('chunks', 'readonly');
         const store = tx.objectStore('chunks');
-        const idx = store.index('byTransfer');
-        const req = idx.getAll(IDBKeyRange.only(transferId));
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => reject(req.error);
+        const req = store.openCursor();
+        const chunks = [];
+        req.onsuccess = (ev) => {
+          const cursor = ev.target.result;
+          if (!cursor) {
+            resolve(chunks);
+            return;
+          }
+          const record = cursor.value;
+          if (record && record.transferId === transferId) {
+            chunks.push(record);
+          }
+          cursor.continue();
+        };
+        req.onerror = (ev) => {
+          console.warn('getChunksForTransfer cursor error', ev.target.error);
+          reject(ev.target.error);
+        };
       });
     } catch (e) {
+      console.warn('getChunksForTransfer failed', e);
       return [];
     }
   }
@@ -83,16 +100,23 @@
       return new Promise((resolve, reject) => {
         const tx = db.transaction('chunks', 'readwrite');
         const store = tx.objectStore('chunks');
-        const idx = store.index('byTransfer');
-        const req = idx.openCursor(IDBKeyRange.only(transferId));
+        const req = store.openCursor();
         req.onsuccess = (ev) => {
           const cursor = ev.target.result;
-          if (!cursor) return;
-          cursor.delete();
+          if (!cursor) {
+            resolve();
+            return;
+          }
+          const record = cursor.value;
+          if (record && record.transferId === transferId) {
+            cursor.delete();
+          }
           cursor.continue();
         };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
+        req.onerror = (ev) => {
+          console.warn('deleteChunksForTransfer cursor error', ev.target.error);
+          reject(ev.target.error);
+        };
       });
     } catch (e) {
       console.warn('deleteChunksForTransfer failed', e);
@@ -100,11 +124,31 @@
   }
 
   // finalize transfer: close writable (with retries) or assemble from DB, then cleanup
+  async function drainPersistedChunksToWritable() {
+    if (!metadata || !metadata.transferId || !writable) return;
+    const transferId = metadata.transferId;
+    const chunks = await getChunksForTransfer(transferId);
+    if (!chunks || chunks.length === 0) {
+      console.log('No persisted chunks to drain to writable');
+      return;
+    }
+    const ordered = chunks.sort((a, b) => a.index - b.index);
+    for (const record of ordered) {
+      const position = record.index * metadata.chunkSize;
+      console.log('Draining chunk to writable', record.index, 'position', position);
+      await writable.write({ type: 'write', position, data: new Uint8Array(record.payload) });
+    }
+    console.log('Drained', ordered.length, 'persisted chunks to writable');
+  }
+
   async function finalizeTransfer() {
     if (!metadata || !metadata.transferId) return;
+    if (transferFinalized) return;
+    transferFinalized = true;
     const transferId = metadata.transferId;
     try {
       if (writable) {
+        await drainPersistedChunksToWritable();
         // attempt to close with retries
         let lastErr = null;
         for (let attempt = 1; attempt <= 3; attempt++) {
@@ -431,14 +475,31 @@
       const progressText = el.querySelector('.progress-text');
       metadata._progressNode = { bar: progressBar, text: progressText };
 
-      // if writable not prepared yet, prompt user now (may be blocked if no gesture) - best-effort
-      if (!writable && window.showSaveFilePicker) {
-        try {
-          fileHandle = await window.showSaveFilePicker({ suggestedName: metadata.filename });
-          writable = await fileHandle.createWritable({ keepExistingData: false });
-        } catch (e) {
-          console.warn('Save dialog cancelled or unavailable', e);
-        }
+      // prompt user to choose save location explicitly
+      if (window.showSaveFilePicker) {
+        const saveBtn = document.createElement('button');
+        saveBtn.innerText = 'Choose save location';
+        saveBtn.addEventListener('click', async () => {
+          try {
+            fileHandle = await window.showSaveFilePicker({ suggestedName: metadata.filename });
+            writable = await fileHandle.createWritable({ keepExistingData: false });
+            saveBtn.disabled = true;
+            saveBtn.innerText = 'Save location selected';
+            console.log('Save location selected for', metadata.filename);
+            await drainPersistedChunksToWritable();
+            if (transferCompleteSignal && receivedCount >= metadata.totalChunks) {
+              await finalizeTransfer();
+            }
+          } catch (e) {
+            console.warn('Save dialog cancelled or unavailable', e);
+          }
+        });
+        el.appendChild(saveBtn);
+      } else {
+        const msg = document.createElement('div');
+        msg.className = 'save-warning';
+        msg.innerText = 'File System Access API unavailable. Large files may not complete correctly.';
+        el.appendChild(msg);
       }
 
       // send initial received list to sender if control channel open
@@ -454,7 +515,12 @@
       }
 
     } else if (msg.type === 'complete') {
-      await finalizeTransfer();
+      transferCompleteSignal = true;
+      if (metadata && receivedCount >= metadata.totalChunks) {
+        await finalizeTransfer();
+      } else {
+        console.log('Complete signal received; waiting for remaining chunks', receivedCount, '/', metadata ? metadata.totalChunks : '?');
+      }
     } else if (msg.type === 'received-req') {
       // sender requests list of received chunks for resume support
       const list = Array.from(receivedSet);
@@ -536,11 +602,15 @@
         controlChannel.send(JSON.stringify({ type: 'received', received: Array.from(receivedSet) }));
       }
 
-      // if complete
+      // if all chunks are present, finalize only once
       if (receivedCount >= metadata.totalChunks) {
         // save final state
         try { await saveReceivedList(metadata.transferId, Array.from(receivedSet)); listSavedTransfers(); } catch(e) {}
-        await finalizeTransfer();
+        if (transferCompleteSignal) {
+          await finalizeTransfer();
+        } else {
+          console.log('All chunks received; waiting for complete signal before finalizing');
+        }
       }
 
     } catch (e) {
