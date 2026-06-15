@@ -124,7 +124,7 @@ let xirsysCacheTs = 0;
 async function fetchXirsysIce() {
   const url = process.env.XIRSYS_URL;
   const user = process.env.XIRSYS_USERNAME;
-  const secret = process.env.XIRSYS_SECRET;
+  const secret = process.env.XIRSYS_SECRET || process.env.XIRSYS_CREDENTIAL;
   if (!url || !user || !secret) throw new Error('XIRSYS not configured');
 
   // cache

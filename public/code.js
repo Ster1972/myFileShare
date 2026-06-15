@@ -160,7 +160,15 @@
     document.querySelector(".fs-screen").classList.add("active");
 
     // start WebRTC negotiation as the initiator (sender)
-    await createPeerConnectionAndOffer();
+    try {
+      await createPeerConnectionAndOffer();
+    } catch (err) {
+      console.error('Failed to initialize WebRTC', err);
+      const errorNode = document.querySelector('.error-message');
+      if (errorNode) {
+        errorNode.textContent = 'WebRTC setup failed: ' + err.message;
+      }
+    }
   });
 
   socket.on('webrtc-offer', async (data) => {
