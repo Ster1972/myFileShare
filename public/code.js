@@ -2,7 +2,7 @@
   let receiverID = null;
   const socket = io();
 
-  const CHUNK_SIZE = 1024 * 1024; // 1MB
+  const CHUNK_SIZE = 16 * 1024; // 16KB, safe for RTCDataChannel max message size
   const PARALLEL_CHANNELS = 4; // reduced for reliability
 
   function generateID() {
