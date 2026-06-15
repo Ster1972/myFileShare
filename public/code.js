@@ -16,19 +16,29 @@
   let pendingChannelsOpen = 0;
 
   async function fetchRtcConfig() {
-    try {
-      const r = await fetch('/rtc-config');
-      return await r.json();
-    } catch (e) {
-      return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    const r = await fetch('/rtc-config');
+    if (!r.ok) {
+      const errBody = await r.text().catch(() => null);
+      throw new Error(`rtc-config failed: ${r.status} ${r.statusText}${errBody ? ' - ' + errBody : ''}`);
     }
+    const json = await r.json();
+    if (!json || !Array.isArray(json.iceServers)) {
+      throw new Error('rtc-config returned invalid ICE server configuration');
+    }
+    return json;
   }
 
   // queue ICE candidates received before remoteDescription is set
   let pendingIceCandidates = [];
 
   async function createPeerConnectionAndOffer() {
-    const cfg = await fetchRtcConfig();
+    let cfg;
+    try {
+      cfg = await fetchRtcConfig();
+    } catch (err) {
+      console.error(err);
+      throw err;
+    }
     console.log('Creating RTCPeerConnection with ICE servers:', cfg.iceServers);
     pc = new RTCPeerConnection({ iceServers: cfg.iceServers });
 

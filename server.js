@@ -167,6 +167,6 @@ app.get('/rtc-config', async (req, res) => {
     throw new Error('XIRSYS_ENABLED must be true and XIRSYS credentials must be configured');
   } catch (e) {
     console.error('rtc-config error', e);
-    res.status(500).json({ error: 'rtc-config unavailable' });
+    res.status(500).json({ error: e.message || 'rtc-config unavailable' });
   }
 });
