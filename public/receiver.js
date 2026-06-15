@@ -273,9 +273,22 @@
     pc = new RTCPeerConnection({ iceServers: cfg.iceServers });
 
     pc.onicecandidate = (e) => {
+      console.log('Receiver onicecandidate', e.candidate);
       if (e.candidate) {
-        socket.emit('webrtc-ice', { uid: senderID, candidate: e.candidate });
+        try {
+          socket.emit('webrtc-ice', { uid: senderID, candidate: e.candidate });
+        } catch (err) {
+          console.error('Failed to emit receiver webrtc-ice', err);
+        }
       }
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log('Receiver iceGatheringState:', pc.iceGatheringState);
+    };
+
+    pc.onicecandidateerror = (event) => {
+      console.error('Receiver icecandidateerror', event);
     };
 
     pc.onconnectionstatechange = () => {

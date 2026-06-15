@@ -88,7 +88,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on('webrtc-ice', (data = {}) => {
-    if (!validUid(data.uid) || !data.candidate || typeof data.candidate !== 'object') return socket.emit('error', { message: 'invalid ice data' });
+    if (!validUid(data.uid) || !data.candidate || typeof data.candidate !== 'object') {
+      console.warn('Invalid webrtc-ice payload', data);
+      return socket.emit('error', { message: 'invalid ice data' });
+    }
+    console.log('Relaying ICE candidate from', socket.id, 'to room', data.uid, 'candidate:', data.candidate.candidate?.slice(0, 120));
     socket.to(data.uid).emit('webrtc-ice', { candidate: data.candidate, from: socket.id });
   });
 
