@@ -157,14 +157,38 @@ async function fetchXirsysIce() {
 // Endpoint to return ICE servers configuration (STUN/TURN)
 app.get('/rtc-config', async (req, res) => {
   try {
-    // prefer Xirsys if explicitly enabled
+    // prefer Xirsys dynamic ICE if explicitly enabled
     if (process.env.XIRSYS_ENABLED === 'true') {
       const iceServers = await fetchXirsysIce();
-      console.log('Returning Xirsys ICE servers');
+      console.log('Returning Xirsys ICE servers (dynamic)');
       return res.json({ iceServers });
     }
 
-    throw new Error('XIRSYS_ENABLED must be true and XIRSYS credentials must be configured');
+    // static Xirsys TURN + STUN configuration
+    const turnUser = process.env.TURN_USERNAME;
+    const turnCred = process.env.TURN_PASSWORD;
+    if (!turnUser || !turnCred) {
+      throw new Error('TURN_USERNAME and TURN_PASSWORD must be configured for static TURN');
+    }
+
+    const iceServers = [
+      { urls: 'stun:us-turn9.xirsys.com' },
+      {
+        urls: [
+          'turn:us-turn9.xirsys.com:80?transport=udp',
+          'turn:us-turn9.xirsys.com:3478?transport=udp',
+          'turn:us-turn9.xirsys.com:80?transport=tcp',
+          'turn:us-turn9.xirsys.com:3478?transport=tcp',
+          'turns:us-turn9.xirsys.com:443?transport=tcp',
+          'turns:us-turn9.xirsys.com:5349?transport=tcp'
+        ],
+        username: turnUser,
+        credential: turnCred
+      }
+    ];
+
+    console.log('Returning ICE servers:', iceServers);
+    res.json({ iceServers });
   } catch (e) {
     console.error('rtc-config error', e);
     res.status(500).json({ error: e.message || 'rtc-config unavailable' });
